@@ -1,0 +1,30 @@
+# 11 — Environment Variables Example
+
+NEXT_PUBLIC_SITE_URL=https://your-domain.com
+
+# Supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=replace_me
+SUPABASE_ANON_KEY=replace_me
+
+# Stripe
+STRIPE_SECRET_KEY=sk_live_or_test_replace_me
+STRIPE_WEBHOOK_SECRET=whsec_replace_me
+STRIPE_PRICE_PAID_REPORT=price_replace_me
+
+# Resend
+RESEND_API_KEY=re_replace_me
+RESEND_FROM_EMAIL=reports@your-domain.com
+RESEND_FROM_NAME=Startup Readiness
+
+# OpenAI
+OPENAI_API_KEY=sk_replace_me
+OPENAI_MODEL=gpt-4o
+
+# Tally
+TALLY_WEBHOOK_SECRET_FREE=replace_me
+TALLY_WEBHOOK_SECRET_PAID=replace_me
+TALLY_WEBHOOK_SECRET_REVIEW=replace_me
+
+# Internal
+INTERNAL_ALERT_EMAIL=you@your-domain.com
