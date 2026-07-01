@@ -1,0 +1,41 @@
+{
+  "name": "startup-intelligence",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Founder Intelligence Platform scaffold aligned to the repository product specification.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bog2si-sudo/StartUp-Intelligence.git"
+  },
+  "keywords": ["startup", "nextjs", "vercel", "supabase", "stripe", "openai"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "marked": "^15.0.1",
+    "nanoid": "^5.0.1",
+    "next": "^15.3.3",
+    "openai": "^4.0.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "resend": "^4.0.0",
+    "stripe": "^18.2.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "^5.8.3"
+  },
+  "bugs": {
+    "url": "https://github.com/bog2si-sudo/StartUp-Intelligence/issues"
+  },
+  "homepage": "https://github.com/bog2si-sudo/StartUp-Intelligence#readme"
+}
