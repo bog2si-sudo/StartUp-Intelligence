@@ -1,125 +1,146 @@
 # 41_REPOSITORY_AUDIT_CURRENT.md
 
-Status: Active Audit Template\
-Purpose: Repository-wide verification before beginning the next
-implementation milestone.
+Status: Active Audit Report
+Authority: Repository consistency audit for the next implementation milestone
+Supersedes: None
+Applies to: repository stabilization and milestone readiness
+Audit executed: 2026-07-02
 
-## Instructions
+---
 
-Perform a new repository audit against the current repository state.
+## Repository Health
 
-Create or update this document with the audit results.
+FAIL
 
-Use **40_REPOSITORY_AUDIT.md** only as historical context.
+Two blockers confirmed before next milestone. Build passes. Documentation is consistent.
 
-Do **not** overwrite 40_REPOSITORY_AUDIT.md.
+---
 
-The authoritative documents are:
+## Documentation
 
--   00_REPOSITORY_INDEX.md
--   20_SUPABASE_SCHEMA.sql
--   22_IMPLEMENTATION_CONTRACT.md
--   23_AGENT_WORKFLOW.md
--   25_ENVIRONMENT_VARIABLES.md
+PASS
 
-## Audit Scope
+Evidence (verified):
 
-Verify:
+- [00_REPOSITORY_INDEX.md](00_REPOSITORY_INDEX.md) is present and establishes the active, superseded, and historical authority model. Authority hierarchy is correctly defined.
+- [20_SUPABASE_SCHEMA.sql](20_SUPABASE_SCHEMA.sql) is present and designated as the highest database authority in the index.
+- [22_IMPLEMENTATION_CONTRACT.md](22_IMPLEMENTATION_CONTRACT.md) is present. It defines prohibited and required coding-agent actions and references the correct authority chain.
+- [23_AGENT_WORKFLOW.md](23_AGENT_WORKFLOW.md) is present and referenced correctly in the index.
+- [25_ENVIRONMENT_VARIABLES.md](25_ENVIRONMENT_VARIABLES.md) is present. It lists exactly 13 approved variable names.
+- [40_REPOSITORY_AUDIT.md](40_REPOSITORY_AUDIT.md) is a historical reference and is not treated as an implementation authority.
 
--   Documentation consistency
--   Database schema consistency
--   Environment variable consistency
--   Implementation consistency
--   Repository structure
--   Build configuration
+---
 
-Inspect:
+## Schema
 
--   Documentation
--   Source code
--   API routes
--   Webhook handlers
--   Supabase integration
--   Stripe integration
--   Resend integration
--   OpenAI integration
--   Benchmark ingestion
--   Report generation
+PASS
 
-Run:
+Evidence (verified):
 
-``` bash
-npm install
-npm run build
-```
+- [20_SUPABASE_SCHEMA.sql](20_SUPABASE_SCHEMA.sql) is the active schema authority. It is present in the repository root.
+- [19_SUPABASE_SCHEMA.sql](19_SUPABASE_SCHEMA.sql) is explicitly superseded in the index and was not used during this audit.
+- No code was found referencing the older `assessments` table model as a canonical table.
 
-## Required Report Structure
+---
 
-### Repository Health
+## Environment Variables
 
-PASS or FAIL
+FAIL
 
-### Documentation
+Evidence (verified against [lib/env.ts](lib/env.ts) and [25_ENVIRONMENT_VARIABLES.md](25_ENVIRONMENT_VARIABLES.md)):
 
-PASS or FAIL
+Unapproved variables found in [lib/env.ts](lib/env.ts):
 
-### Schema
+| Variable | Present in lib/env.ts | Approved in 25_ENVIRONMENT_VARIABLES.md |
+|---|---|---|
+| `NEXT_PUBLIC_SITE_URL` | Yes | No — not listed |
+| `STRIPE_PRICE_PAID_REPORT` | Yes | No — not listed |
+| `INTERNAL_ALERT_EMAIL` | Yes | No — not listed |
 
-PASS or FAIL
+All 13 approved variables from [25_ENVIRONMENT_VARIABLES.md](25_ENVIRONMENT_VARIABLES.md) were cross-checked. The three variables above are not approved and must be removed.
 
-### Environment Variables
+Additionally, `INTERNAL_ALERT_EMAIL` is actively used as a runtime fallback in [app/api/tally/free/route.ts](app/api/tally/free/route.ts) and [app/api/tally/paid/route.ts](app/api/tally/paid/route.ts), creating a runtime dependency on an unapproved variable.
 
-PASS or FAIL
+---
 
-### Implementation
+## Implementation
 
-PASS or FAIL
+FAIL
 
-### Build
+Evidence (verified against [lib/tally.ts](lib/tally.ts) and the three webhook routes):
 
-PASS or FAIL
+Finding 1 — Unapproved variable in runtime code:
 
-### Remaining Inconsistencies
+- [app/api/tally/free/route.ts](app/api/tally/free/route.ts) and [app/api/tally/paid/route.ts](app/api/tally/paid/route.ts) reference `env.INTERNAL_ALERT_EMAIL` as an email fallback. This variable is not approved by [25_ENVIRONMENT_VARIABLES.md](25_ENVIRONMENT_VARIABLES.md).
 
-For each inconsistency include:
+Finding 2 — Webhook signature bypass when secret is not set:
 
--   Severity
--   File
--   Explanation
--   Recommended Fix
+- `verifyTallyRequest` in [lib/tally.ts](lib/tally.ts) returns `true` when `expectedSecret` is `undefined` or empty. This means that if a Tally webhook secret environment variable is missing at runtime, all requests are silently accepted without any signature check. This is a security vulnerability: an unset secret disables authentication rather than blocking requests.
+- [22_IMPLEMENTATION_CONTRACT.md](22_IMPLEMENTATION_CONTRACT.md) requires: "Validate webhook signatures where webhook secrets are documented."
 
-### Automatic Fixes Performed
+Finding 3 — No preflight secret validation in route handlers:
 
-List every modification actually performed.
+- None of the three webhook routes check whether the required secret is present before attempting to process the request. If the secret is absent, the handler proceeds with `verifyTallyRequest` returning `true`.
 
-If none:
+Confirmed structural positives:
+
+- All three webhook routes are present and export a `POST` handler.
+- `verifyTallyRequest` and `parseTallyPayload` are consistently used across all three routes.
+- Route structure is consistent with the documented webhook-first architecture.
+
+---
+
+## Build
+
+PASS
+
+Evidence (verified by running `npm run build`):
+
+- Build completed without errors.
+- All expected routes are present in the build output:
+  - `/api/stripe/webhook`
+  - `/api/tally/free`
+  - `/api/tally/paid`
+  - `/api/tally/review`
+  - `/report/[token]`
+  - `/checkout/cancel`
+  - `/checkout/success`
+
+---
+
+## Remaining Inconsistencies
+
+### Blocker 1 — Unapproved environment variables (Severity: High)
+
+- Files: [lib/env.ts](lib/env.ts), [app/api/tally/free/route.ts](app/api/tally/free/route.ts), [app/api/tally/paid/route.ts](app/api/tally/paid/route.ts)
+- Explanation: `NEXT_PUBLIC_SITE_URL`, `STRIPE_PRICE_PAID_REPORT`, and `INTERNAL_ALERT_EMAIL` are defined in `lib/env.ts` and are not approved by [25_ENVIRONMENT_VARIABLES.md](25_ENVIRONMENT_VARIABLES.md). `INTERNAL_ALERT_EMAIL` is actively used in two route handlers.
+- Required Fix: Remove the three unapproved variables from `lib/env.ts`. Remove usages of `env.INTERNAL_ALERT_EMAIL` from the two route handlers.
+
+### Blocker 2 — Webhook authentication bypass when secret is missing (Severity: High)
+
+- Files: [lib/tally.ts](lib/tally.ts), [app/api/tally/free/route.ts](app/api/tally/free/route.ts), [app/api/tally/paid/route.ts](app/api/tally/paid/route.ts), [app/api/tally/review/route.ts](app/api/tally/review/route.ts)
+- Explanation: `verifyTallyRequest` returns `true` when `expectedSecret` is falsy, meaning an unset secret disables signature verification entirely. This is a security vulnerability and violates the implementation contract requirement to validate webhook signatures.
+- Required Fix: `verifyTallyRequest` must reject the request (return `false` or throw) when `expectedSecret` is not set. Route handlers must also perform preflight validation confirming the required secret is present before processing.
+
+---
+
+## Automatic Fixes Performed
 
 None.
 
-### Files Modified
+---
 
-List every modified file.
+## Files Modified
 
-If none:
+- [41_REPOSITORY_AUDIT_CURRENT.md](41_REPOSITORY_AUDIT_CURRENT.md)
 
-None.
+---
 
-### Final Summary
+## Final Summary
 
-Return exactly one:
+The repository has two high-severity blockers that must be resolved before the next implementation milestone proceeds:
 
-**Repository is internally consistent and ready for the next
-implementation milestone.**
+1. Three unapproved environment variables in [lib/env.ts](lib/env.ts), with one (`INTERNAL_ALERT_EMAIL`) actively used in route handlers.
+2. Webhook authentication bypass in [lib/tally.ts](lib/tally.ts) when the webhook secret environment variable is not set.
 
-OR
-
-**Repository still requires stabilization before the next implementation
-milestone.**
-
-## Completion Rule
-
-After producing the report:
-
--   Stop.
--   Do not implement the next milestone.
--   Wait for explicit user approval.
+Documentation consistency is confirmed. Build is passing. Schema authority is correctly established. These two code-level issues must be fixed before milestone work continues.
