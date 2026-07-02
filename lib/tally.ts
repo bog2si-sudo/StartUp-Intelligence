@@ -7,13 +7,13 @@ const tallyPayloadSchema = z.object({
 });
 
 export function verifyTallyRequest(req: Request, expectedSecret?: string) {
-  const signature = req.headers.get('x-tally-signature');
   if (!expectedSecret) {
-    return true;
+    return false;
   }
 
+  const signature = req.headers.get('x-tally-signature');
   if (!signature) {
-    throw new Error('Missing Tally signature.');
+    return false;
   }
 
   return signature === expectedSecret;
