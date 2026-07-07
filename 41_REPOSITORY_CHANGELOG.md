@@ -94,4 +94,57 @@ These items are intentionally excluded from Version 4.
 
 ------------------------------------------------------------------------
 
+# Milestone 4 — Free Webhook Persistence Slice
+
+Date: 2026-07-07
+
+Branch merged: `copilot/main` → `main`
+
+## Summary
+
+Completed the free webhook persistence slice. The Tally free-assessment
+webhook now writes a full, ordered chain of records to Supabase before
+returning a response.
+
+## Changes included in this merge
+
+### New files
+
+-   `27_VERSION_CONTRACT.md` — Active authority document defining
+    canonical version strings for `assessment_version`,
+    `scoring_model_version`, `report_version`, and `prompt_version`.
+-   `lib/versions.ts` — Single runtime source for all four canonical
+    version constants; mirrors `27_VERSION_CONTRACT.md` exactly.
+
+### Modified files
+
+-   `app/api/tally/free/route.ts` — Full Supabase persistence flow:
+    idempotency guard on `tally_response_id`, founder upsert,
+    submission insert, event insert, report record insert (status =
+    queued, unguessable download token), email log insert, email send
+    via Resend, email log update with send outcome. Supabase-null
+    fallback preserved for email-only mode.
+-   `lib/tally.ts` — Added `extractAssessmentVersion`,
+    `extractEventId`, `extractResponseId`, `extractEmail` helpers;
+    enriched `mapFreeFields`, `mapPaidFields`, `mapReviewFields` with
+    `name`, `response_id`, and `event_id` fields.
+-   `00_REPOSITORY_INDEX.md` — `27_VERSION_CONTRACT.md` registered as
+    Active authority for all version identifiers.
+-   `.gitignore` — Added `*.tsbuildinfo` to prevent build-info files
+    from being committed.
+
+## Build verification
+
+-   `tsc --noEmit`: 0 errors
+-   `npm run build`: compiled successfully, 10 pages generated
+
+## Scope boundary
+
+This slice covers only the free webhook persistence path.
+Paid webhook, review webhook, Stripe, OpenAI report generation, PDF,
+benchmark ingestion, and frontend work are explicitly excluded and
+remain unimplemented.
+
+------------------------------------------------------------------------
+
 End of document.
