@@ -1,15 +1,39 @@
 import { NextResponse } from 'next/server';
 import { nanoid } from 'nanoid';
 import { env } from '@/lib/env';
-import { mapFreeFields, parseTallyPayload, verifyTallyRequest } from '@/lib/tally';
+import {
+  extractAssessmentVersion,
+  mapFreeFields,
+  parseTallyPayload,
+  verifyTallyRequest,
+} from '@/lib/tally';
 import { sendEmail } from '@/lib/resend';
 import { supabase } from '@/lib/supabase';
+import { PROMPT_VERSION, REPORT_VERSION, SCORING_MODEL_VERSION } from '@/lib/versions';
 
-const ASSESSMENT_VERSION = '1.0';
-const SCORING_MODEL_VERSION = '1.0';
-const REPORT_VERSION = '1.0';
-const PROMPT_VERSION = '1.0';
 const REPORT_EXPIRY_DAYS = 30;
+
+async function persistProcessingError(params: {
+  founderId?: string | null;
+  submissionId?: string | null;
+  errorCode: string;
+  message: string;
+  payload?: Record<string, unknown>;
+}) {
+  try {
+    await supabase!.from('processing_errors').insert({
+      founder_id: params.founderId ?? null,
+      submission_id: params.submissionId ?? null,
+      severity: 'error',
+      source: 'tally',
+      error_code: params.errorCode,
+      message: params.message,
+      payload: params.payload ?? {},
+    });
+  } catch {
+    // best-effort; do not propagate
+  }
+}
 
 export async function POST(req: Request) {
   if (!env.TALLY_WEBHOOK_SECRET_FREE) {
@@ -31,23 +55,28 @@ export async function POST(req: Request) {
   const payload = parseTallyPayload(rawPayload);
   const fields = mapFreeFields(payload);
 
+  // Validate required fields before any DB work (per 04_BACKEND_TECH_SPEC.md)
   if (!fields.email) {
     return NextResponse.json({ error: 'Missing email' }, { status: 400 });
   }
+  const assessmentVersion = extractAssessmentVersion(payload);
+  if (!assessmentVersion) {
+    return NextResponse.json({ error: 'Missing assessment_version' }, { status: 400 });
+  }
 
-  // If Supabase is not configured, fall through to email-only mode
+  // Supabase-null fallback: email-only mode when DB is not configured
   if (!supabase) {
     const reportToken = nanoid(32);
     await sendEmail({
       to: fields.email,
       subject: 'Your startup assessment is being prepared',
-      html: `<p>Your report is being generated.</p><p>Token: ${reportToken}</p>`,
-      text: `Your report is being generated. Token: ${reportToken}`,
+      html: `<p>Your report is being generated.</p><p>You can access it here: /report/${reportToken}</p>`,
+      text: `Your report is being generated. You can access it at: /report/${reportToken}`,
     });
     return NextResponse.json({ ok: true, reportToken });
   }
 
-  // Idempotency: if this Tally response was already processed, return 200
+  // Idempotency: if this Tally response was already processed, return 200 immediately
   if (fields.response_id) {
     const { data: existing } = await supabase
       .from('submissions')
@@ -75,7 +104,10 @@ export async function POST(req: Request) {
     founderId = existingFounder.id;
     await supabase
       .from('founders')
-      .update({ last_seen_at: new Date().toISOString(), company_name: fields.company_name || undefined })
+      .update({
+        last_seen_at: new Date().toISOString(),
+        ...(fields.company_name ? { company_name: fields.company_name } : {}),
+      })
       .eq('id', founderId);
   } else {
     const { data: newFounder, error: founderError } = await supabase
@@ -91,6 +123,11 @@ export async function POST(req: Request) {
       .single();
 
     if (founderError || !newFounder) {
+      await persistProcessingError({
+        errorCode: 'founder_insert_failed',
+        message: founderError?.message ?? 'Failed to create founder record',
+        payload: { email },
+      });
       return NextResponse.json({ error: 'Failed to create founder record' }, { status: 500 });
     }
     founderId = newFounder.id;
@@ -105,7 +142,7 @@ export async function POST(req: Request) {
       status: 'received',
       tally_response_id: fields.response_id || null,
       source_event_id: fields.event_id || null,
-      assessment_version: ASSESSMENT_VERSION,
+      assessment_version: assessmentVersion,
       scoring_model_version: SCORING_MODEL_VERSION,
       responses: payload ?? {},
       normalized_responses: {},
@@ -114,32 +151,50 @@ export async function POST(req: Request) {
     .single();
 
   if (submissionError || !submission) {
+    await persistProcessingError({
+      founderId,
+      errorCode: 'submission_insert_failed',
+      message: submissionError?.message ?? 'Failed to create submission record',
+      payload: { tally_response_id: fields.response_id },
+    });
     return NextResponse.json({ error: 'Failed to create submission record' }, { status: 500 });
   }
 
   const submissionId = submission.id;
 
-  // Insert event (idempotency key prevents duplicate processing)
-  const idempotencyKey = fields.event_id ? `tally-free-${fields.event_id}` : `tally-free-sub-${submissionId}`;
-  await supabase
-    .from('events')
-    .insert({
-      founder_id: founderId,
-      submission_id: submissionId,
-      source: 'tally',
-      event_name: 'tally.free.received',
-      external_event_id: fields.event_id || null,
-      idempotency_key: idempotencyKey,
-      payload: payload ?? {},
-    })
-    .select('id')
-    .maybeSingle();
+  // Insert event — idempotency key prevents duplicate processing
+  const idempotencyKey = fields.event_id
+    ? `tally-free-${fields.event_id}`
+    : `tally-free-sub-${submissionId}`;
 
-  // Insert report record (status = queued, token for private access)
+  const { error: eventError } = await supabase.from('events').insert({
+    founder_id: founderId,
+    submission_id: submissionId,
+    source: 'tally',
+    event_name: 'tally.free.received',
+    external_event_id: fields.event_id || null,
+    idempotency_key: idempotencyKey,
+    payload: payload ?? {},
+  });
+
+  if (eventError) {
+    // Non-fatal: log the failure and continue
+    await persistProcessingError({
+      founderId,
+      submissionId,
+      errorCode: 'event_insert_failed',
+      message: eventError.message,
+      payload: { idempotency_key: idempotencyKey },
+    });
+  }
+
+  // Insert report record (status = queued, unguessable download token)
   const downloadToken = nanoid(32);
-  const downloadExpiresAt = new Date(Date.now() + REPORT_EXPIRY_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const downloadExpiresAt = new Date(
+    Date.now() + REPORT_EXPIRY_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
 
-  const { error: reportError } = await supabase
+  const { data: reportRecord, error: reportError } = await supabase
     .from('reports')
     .insert({
       founder_id: founderId,
@@ -151,25 +206,82 @@ export async function POST(req: Request) {
       openai_model: env.OPENAI_MODEL ?? null,
       download_token: downloadToken,
       download_expires_at: downloadExpiresAt,
-    });
+    })
+    .select('id')
+    .single();
 
-  if (reportError) {
+  if (reportError || !reportRecord) {
+    await persistProcessingError({
+      founderId,
+      submissionId,
+      errorCode: 'report_insert_failed',
+      message: reportError?.message ?? 'Failed to create report record',
+      payload: {},
+    });
     return NextResponse.json({ error: 'Failed to create report record' }, { status: 500 });
   }
 
-  // Update submission status to processing
-  await supabase
-    .from('submissions')
-    .update({ status: 'processing' })
-    .eq('id', submissionId);
+  const reportId = reportRecord.id;
 
-  // Send email with report link
-  await sendEmail({
+  // Advance submission to processing
+  await supabase.from('submissions').update({ status: 'processing' }).eq('id', submissionId);
+
+  // Persist email log (queued) before send
+  const emailSubject = 'Your startup assessment is being prepared';
+  let emailLogId: string | null = null;
+
+  if (env.RESEND_FROM_EMAIL) {
+    const { data: emailLogRecord } = await supabase
+      .from('email_logs')
+      .insert({
+        founder_id: founderId,
+        submission_id: submissionId,
+        report_id: reportId,
+        template_key: 'free-report-notification',
+        to_email: fields.email,
+        from_email: env.RESEND_FROM_EMAIL,
+        subject: emailSubject,
+        status: 'queued',
+        payload: {},
+      })
+      .select('id')
+      .single();
+    emailLogId = emailLogRecord?.id ?? null;
+  }
+
+  // Send email
+  const emailResult = await sendEmail({
     to: fields.email,
-    subject: 'Your startup assessment is being prepared',
+    subject: emailSubject,
     html: `<p>Your report is being generated.</p><p>You can access it here: /report/${downloadToken}</p>`,
     text: `Your report is being generated. You can access it at: /report/${downloadToken}`,
   });
+
+  // Update email log with send outcome
+  if (emailLogId) {
+    const resendEmailId = (emailResult as any)?.data?.id ?? null;
+    const sendError = (emailResult as any)?.error ?? null;
+
+    if (sendError) {
+      await supabase
+        .from('email_logs')
+        .update({
+          status: 'failed',
+          failed_at: new Date().toISOString(),
+          error_message: String(sendError?.message ?? 'Send failed'),
+        })
+        .eq('id', emailLogId);
+    } else {
+      await supabase
+        .from('email_logs')
+        .update({
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          resend_email_id: resendEmailId,
+        })
+        .eq('id', emailLogId);
+    }
+  }
 
   return NextResponse.json({ ok: true, reportToken: downloadToken });
 }

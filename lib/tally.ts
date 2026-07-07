@@ -25,6 +25,10 @@ export function parseTallyPayload(payload: unknown): any {
   return parsed.success ? parsed.data : payload;
 }
 
+export function extractAssessmentVersion(payload: any): string {
+  return payload?.data?.assessment_version || '';
+}
+
 export function extractEventId(payload: any): string {
   return payload?.eventId || payload?.event_id || '';
 }
