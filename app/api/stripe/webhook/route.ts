@@ -32,6 +32,23 @@ async function persistProcessingError(params: {
   }
 }
 
+function normalizeNonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function extractPaymentLinkageToken(session: Stripe.Checkout.Session): string | null {
+  return (
+    normalizeNonEmptyString(session.metadata?.payment_linkage_token) ||
+    normalizeNonEmptyString(session.metadata?.shared_token) ||
+    normalizeNonEmptyString(session.metadata?.stripe_linkage_token) ||
+    normalizeNonEmptyString(session.metadata?.linkage_token)
+  );
+}
+
 export async function POST(req: Request) {
   const signature = (await headers()).get('stripe-signature');
   const body = await req.text();
@@ -125,10 +142,9 @@ export async function POST(req: Request) {
     typeof session.metadata?.product_code === 'string' && session.metadata.product_code.length > 0
       ? session.metadata.product_code
       : 'paid_roadmap_report';
+  const paymentLinkageToken = extractPaymentLinkageToken(session);
 
-  // Resolve customer email for founder linkage.
-  // customer_email is set when the session is created; customer_details.email
-  // is populated after payment completes. Use whichever is available.
+  // Retain customer email for audit and troubleshooting metadata.
   const rawCustomerEmail =
     (typeof session.customer_email === 'string' && session.customer_email) ||
     (typeof session.customer_details?.email === 'string' && session.customer_details.email) ||
@@ -156,99 +172,126 @@ export async function POST(req: Request) {
     });
   }
 
-  // Attempt founder linkage via customer email.
-  // This is the only reliable identifier available from a Tally-embedded Stripe payment
-  // when the Tally webhook does not carry Stripe session identifiers.
-  let founderId: string | null = null;
-  let submissionId: string | null = null;
-  let reportId: string | null = null;
-
-  if (customerEmail) {
-    const { data: founder } = await supabase
-      .from('founders')
-      .select('id')
-      .eq('email', customerEmail)
-      .maybeSingle();
-
-    if (founder) {
-      founderId = founder.id;
-
-      // Find the most recent paid submission in 'processing' status that does not
-      // yet have a payment record linked to it.
-      const { data: recentSubmissions } = await supabase
-        .from('submissions')
-        .select('id')
-        .eq('founder_id', founderId)
-        .eq('submission_type', 'paid')
-        .eq('status', 'processing')
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (recentSubmissions && recentSubmissions.length > 0) {
-        for (const sub of recentSubmissions) {
-          const { data: existingPayment } = await supabase
-            .from('payments')
-            .select('id')
-            .eq('submission_id', sub.id)
-            .maybeSingle();
-
-          if (!existingPayment) {
-            submissionId = sub.id;
-            break;
-          }
-        }
-
-        // If every recent submission already has a payment, fall back to the most
-        // recent and record the ambiguity.
-        if (!submissionId) {
-          submissionId = recentSubmissions[0].id;
-          await persistProcessingError({
-            founderId,
-            submissionId,
-            eventId: dbEventId,
-            severity: 'warning',
-            errorCode: 'stripe_payment_all_submissions_linked',
-            message:
-              'All recent paid submissions for this founder already have a payment; linking payment to the most recent submission',
-            payload: { stripe_event_id: stripeEventId, founder_id: founderId },
-          });
-        }
-      }
-
-      // Resolve the report created by the Tally webhook for this submission
-      if (submissionId) {
-        const { data: report } = await supabase
-          .from('reports')
-          .select('id')
-          .eq('submission_id', submissionId)
-          .eq('report_type', 'paid')
-          .maybeSingle();
-        reportId = report?.id ?? null;
-      }
-    }
-  }
-
-  // payments.founder_id is NOT NULL — a payment record can only be inserted
-  // when a founder has been resolved.
-  if (!founderId) {
+  if (!paymentLinkageToken) {
     await persistProcessingError({
       eventId: dbEventId,
       severity: 'warning',
-      errorCode: 'stripe_payment_no_founder_link',
+      errorCode: 'stripe_payment_missing_linkage_token',
       message:
-        'checkout.session.completed received but no founder could be resolved via customer email; payment record not created',
+        'checkout.session.completed received without a shared payment linkage token in Stripe metadata; payment record not created',
       payload: {
         stripe_event_id: stripeEventId,
         stripe_checkout_session_id: stripeCheckoutSessionId,
-        customer_email: customerEmail,
       },
     });
     return NextResponse.json({
       ok: true,
       received: true,
       linked: false,
-      reason: 'no_founder_resolved',
+      reason: 'missing_linkage_token',
     });
+  }
+
+  let founderId: string | null = null;
+  let submissionId: string | null = null;
+  let reportId: string | null = null;
+
+  const { data: matchingSubmissions, error: submissionLookupError } = await supabase
+    .from('submissions')
+    .select('id, founder_id')
+    .eq('submission_type', 'paid')
+    .eq('metadata->>payment_linkage_token', paymentLinkageToken)
+    .limit(2);
+
+  if (submissionLookupError) {
+    await persistProcessingError({
+      eventId: dbEventId,
+      severity: 'warning',
+      errorCode: 'stripe_payment_submission_lookup_failed',
+      message:
+        'checkout.session.completed received but paid submission lookup by shared token failed; payment record not created',
+      payload: {
+        stripe_event_id: stripeEventId,
+        payment_linkage_token: paymentLinkageToken,
+        db_error: submissionLookupError.message,
+      },
+    });
+    return NextResponse.json({
+      ok: true,
+      received: true,
+      linked: false,
+      reason: 'submission_lookup_failed',
+    });
+  }
+
+  if (!matchingSubmissions || matchingSubmissions.length === 0) {
+    await persistProcessingError({
+      eventId: dbEventId,
+      severity: 'warning',
+      errorCode: 'stripe_payment_no_submission_link',
+      message:
+        'checkout.session.completed received but no paid submission matched the shared linkage token; payment record not created',
+      payload: {
+        stripe_event_id: stripeEventId,
+        payment_linkage_token: paymentLinkageToken,
+      },
+    });
+    return NextResponse.json({
+      ok: true,
+      received: true,
+      linked: false,
+      reason: 'no_submission_for_linkage_token',
+    });
+  }
+
+  if (matchingSubmissions.length > 1) {
+    await persistProcessingError({
+      eventId: dbEventId,
+      severity: 'warning',
+      errorCode: 'stripe_payment_ambiguous_submission_link',
+      message:
+        'checkout.session.completed matched multiple paid submissions for the same shared linkage token; payment record not created',
+      payload: {
+        stripe_event_id: stripeEventId,
+        payment_linkage_token: paymentLinkageToken,
+        candidate_submission_ids: matchingSubmissions.map((row) => row.id),
+      },
+    });
+    return NextResponse.json({
+      ok: true,
+      received: true,
+      linked: false,
+      reason: 'ambiguous_submission_linkage_token',
+    });
+  }
+
+  submissionId = matchingSubmissions[0].id;
+  founderId = matchingSubmissions[0].founder_id;
+
+  const { data: report, error: reportLookupError } = await supabase
+    .from('reports')
+    .select('id')
+    .eq('submission_id', submissionId)
+    .eq('report_type', 'paid')
+    .maybeSingle();
+
+  if (reportLookupError) {
+    await persistProcessingError({
+      founderId,
+      submissionId,
+      eventId: dbEventId,
+      severity: 'warning',
+      errorCode: 'stripe_payment_report_lookup_failed',
+      message:
+        'Paid submission was linked by shared token but report lookup failed; payment will be persisted without report linkage',
+      payload: {
+        stripe_event_id: stripeEventId,
+        payment_linkage_token: paymentLinkageToken,
+        db_error: reportLookupError.message,
+      },
+    });
+  } else {
+    reportId = report?.id ?? null;
   }
 
   // Insert payment record with all available Stripe identifiers
@@ -268,7 +311,9 @@ export async function POST(req: Request) {
       product_code: productCode,
       paid_at: new Date().toISOString(),
       metadata: {
-        linked_via: 'customer_email',
+        linked_via: 'shared_token',
+        payment_linkage_token: paymentLinkageToken,
+        customer_email: customerEmail,
         submission_linked: submissionId !== null,
         report_linked: reportId !== null,
       },
@@ -317,23 +362,28 @@ export async function POST(req: Request) {
         payment_id: paymentId,
         founder_id: founderId,
         submission_id: submissionId,
+        report_id: reportId,
         processed_at: new Date().toISOString(),
       })
       .eq('id', dbEventId);
   }
 
-  // Record unresolved submission linkage when it occurs
-  if (!submissionId) {
+  // Record unresolved report linkage when it occurs
+  if (!reportId) {
     await persistProcessingError({
       founderId,
+      submissionId,
+      paymentId,
       eventId: dbEventId,
       severity: 'warning',
-      errorCode: 'stripe_payment_no_submission_link',
+      errorCode: 'stripe_payment_no_report_link',
       message:
-        'Payment created and linked to founder but no unlinked paid submission could be resolved; manual reconciliation required',
+        'Payment linked to founder and submission via shared token but no paid report row could be resolved; manual reconciliation required',
       payload: {
         stripe_event_id: stripeEventId,
+        payment_linkage_token: paymentLinkageToken,
         founder_id: founderId,
+        submission_id: submissionId,
         payment_id: paymentId,
       },
     });
