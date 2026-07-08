@@ -73,6 +73,7 @@ Examples:
 | `23_AGENT_WORKFLOW.md` | Exact milestone workflow for coding agents. | Active | Highest milestone workflow authority. | Older workflow instructions and informal agent operating notes. | Defines read → implement → build → status → summarize → wait → commit → push → stop. |
 | `25_ENVIRONMENT_VARIABLES.md` | Standard environment-variable contract. | Active | Highest environment-variable authority. | Any older `.env`, deployment, README, webhook, or integration variable names. | Use only approved names. Do not add aliases or fallback names. |
 | `27_VERSION_CONTRACT.md` | Canonical application version identifiers. | Active | Authoritative for all version strings used at runtime. | Placeholder version strings in `lib/versions.ts` and any informal version references elsewhere. | Source code must derive version constants only from `lib/versions.ts`, which must mirror this document exactly. |
+| `50_REASONING_IMPLEMENTATION_CONTRACT.md` | Implementation contract for Milestone 5 reasoning pipeline. | Active | Highest authority for reasoning implementation, slice boundaries, deterministic vs LLM responsibilities, allowed persistence, and sequencing. | Conflicting reasoning implementation guidance in older documents. | Must be read before any Milestone 5 reasoning, prompt, OpenAI, report-content, or narrative-generation implementation. |
 
 ## Superseded documents
 
