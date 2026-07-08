@@ -233,4 +233,123 @@ ingestion, and frontend work remain unimplemented.
 
 ------------------------------------------------------------------------
 
+# Milestone 4 — Deterministic Payment Linkage Slice
+
+Date: 2026-07-08
+
+Branch merged: `copilot/implement-slice-3-payment-linkage` → `main`
+
+## Summary
+
+Replaced probabilistic email-based Stripe↔Tally reconciliation with
+deterministic shared-token linkage. The Tally paid form now embeds a
+`payment_linkage_token` hidden field that is passed through to Stripe
+Checkout session metadata, enabling exact 1:1 linkage between a Tally
+submission and a Stripe payment.
+
+## Changes included in this merge
+
+### Modified files
+
+-   `lib/tally.ts` — Added `extractPaidLinkageToken()` helper that
+    reads `payment_linkage_token` (and aliased field names) from the
+    Tally payload data, hidden fields, and form answer array. Extended
+    `mapPaidFields` to include `payment_linkage_token` in the returned
+    field map.
+
+-   `app/api/tally/paid/route.ts` — Now requires `payment_linkage_token`
+    in the request (returns HTTP 400 if absent). Stores the token in
+    `submissions.metadata`, `events.metadata`, and `reports.metadata`
+    with `linkage_strategy: 'shared-token-v1'`.
+
+-   `app/api/stripe/webhook/route.ts` — Replaced email-based founder/
+    submission lookup with deterministic token lookup:
+    `submissions.metadata->>'payment_linkage_token'`. Handles exact-match
+    (full linkage), no-match (`stripe_payment_no_submission_link`
+    processing_error), and ambiguous-match
+    (`stripe_payment_ambiguous_submission_link` processing_error) cases
+    explicitly. Also validates that `payment_linkage_token` is present in
+    Stripe session metadata (`stripe_payment_missing_linkage_token` if
+    absent).
+
+## Resolution of previous audit blockers
+
+Both high-severity blockers from the 2026-07-02 audit were resolved in
+this slice or its immediate predecessor:
+
+-   **Blocker 1 — Unapproved environment variables**: `NEXT_PUBLIC_SITE_URL`,
+    `STRIPE_PRICE_PAID_REPORT`, and `INTERNAL_ALERT_EMAIL` removed from
+    `lib/env.ts`. All route usages of `env.INTERNAL_ALERT_EMAIL` removed.
+    `lib/env.ts` now contains exactly the 13 approved variables.
+
+-   **Blocker 2 — Webhook authentication bypass**: `verifyTallyRequest` in
+    `lib/tally.ts` now returns `false` when `expectedSecret` is falsy. All
+    three Tally webhook routes perform a preflight check on the secret
+    variable and return HTTP 500 if it is absent.
+
+## Build verification
+
+-   `tsc --noEmit`: 0 errors
+-   `npm run build`: compiled successfully, 10 pages generated
+
+## Scope boundary
+
+This slice covers deterministic payment linkage and the resolution of the
+two prior audit blockers. Review webhook persistence, OpenAI report
+generation, PDF generation, benchmark ingestion, and frontend work remain
+unimplemented.
+
+------------------------------------------------------------------------
+
+# Milestone 4 — Review Webhook Persistence Slice
+
+Date: 2026-07-08
+
+Branch: `copilot/perform-post-slice-3-repository-audit`
+
+## Summary
+
+Completed the review webhook persistence slice. The Tally review webhook
+now writes an ordered chain of records to Supabase before returning a
+response, following the established free and paid webhook persistence
+pattern.
+
+## Changes included in this merge
+
+### Modified files
+
+-   `app/api/tally/review/route.ts` — Full Supabase persistence flow:
+    JSON parse guard, Tally signature verification, idempotency guard via
+    `events.idempotency_key` (the `review_requests` table has no
+    `tally_response_id` column), founder upsert (source = `tally-review`),
+    review_request insert (status = `received`, Tally identifiers stored
+    in `metadata`), event insert (event_name = `tally.review.received`,
+    `review_request_id` populated), email log insert (template_key =
+    `review-request-confirmation`, `review_request_id` populated), email
+    send via Resend, email log update with send outcome. Supabase-null
+    fallback preserved for email-only mode.
+
+### Documentation files
+
+-   `41_REPOSITORY_AUDIT_CURRENT.md` — Rewritten from FAIL to PASS.
+    Both previous blockers marked resolved. Current state of all four
+    webhook routes documented. Audit date updated to 2026-07-08.
+
+-   `41_REPOSITORY_CHANGELOG.md` — Milestone 4 Slice 3 and Slice 4
+    sections appended.
+
+## Build verification
+
+-   `npm install`: success
+-   `npm run build` (includes TypeScript and lint): compiled successfully,
+    10 pages generated
+
+## Scope boundary
+
+This slice covers only the review webhook persistence path. OpenAI report
+generation, PDF generation, benchmark ingestion, and frontend work are
+explicitly excluded and remain unimplemented.
+
+------------------------------------------------------------------------
+
 End of document.
