@@ -144,7 +144,51 @@ This slice covers only the free webhook persistence path.
 Paid webhook, review webhook, Stripe, OpenAI report generation, PDF,
 benchmark ingestion, and frontend work are explicitly excluded and
 remain unimplemented.
-
+ 
 ------------------------------------------------------------------------
-
+ 
+# Milestone 4 — Slice 2: Paid Webhook + Stripe Reconciliation
+ 
+Date: 2026-07-08
+ 
+## Summary
+ 
+Implemented the paid Tally webhook and Stripe webhook using a safe
+reconciliation model that does not guess Stripe fields from the Tally
+payload and does not change the schema or environment variable contract.
+ 
+## Changes included in this slice
+ 
+### Modified files
+ 
+-   `app/api/tally/paid/route.ts` — Persists founder, paid submission,
+    queued paid report, Tally event, email log, and processing errors.
+    The route does not read or depend on guessed Stripe paths from the
+    Tally payload.
+-   `app/api/stripe/webhook/route.ts` — Verifies
+    `STRIPE_WEBHOOK_SECRET`, persists Stripe payments from Stripe event
+    payloads, links founder/submission/report only when a reliable
+    identifier is present, and records unresolved linkage in payment
+    metadata and `processing_errors`.
+ 
+## Linkage behavior
+ 
+-   Founder linkage is possible through an existing reliable metadata ID
+    or Stripe email-based founder upsert.
+-   Submission linkage is possible only when Stripe metadata includes a
+    reliable existing identifier such as `submission_id` or `report_id`.
+-   Report linkage is possible only when a reliable existing identifier
+    resolves to an existing paid report.
+-   If Stripe lacks a reliable shared identifier, the payment is still
+    persisted with available Stripe fields and the unresolved linkage is
+    recorded for later reconciliation.
+ 
+## Scope boundary
+ 
+This slice does not implement report generation, OpenAI, PDF, review
+webhook work, frontend flow changes, benchmark ingestion, schema changes,
+or new environment variables.
+ 
+------------------------------------------------------------------------
+ 
 End of document.
