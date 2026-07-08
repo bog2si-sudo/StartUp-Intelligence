@@ -62,6 +62,11 @@ export async function POST(req: Request) {
   if (!fields.email) {
     return NextResponse.json({ error: 'Missing email' }, { status: 400 });
   }
+  if (!fields.payment_linkage_token) {
+    return NextResponse.json({ error: 'Missing payment_linkage_token' }, { status: 400 });
+  }
+
+  const paymentLinkageToken = fields.payment_linkage_token;
 
   // Supabase-null fallback: email-only mode when DB is not configured
   if (!supabase) {
@@ -147,6 +152,10 @@ export async function POST(req: Request) {
       scoring_model_version: SCORING_MODEL_VERSION,
       responses: payload ?? {},
       normalized_responses: {},
+      metadata: {
+        payment_linkage_token: paymentLinkageToken,
+        linkage_strategy: 'shared-token-v1',
+      },
     })
     .select('id')
     .single();
@@ -176,6 +185,10 @@ export async function POST(req: Request) {
     external_event_id: fields.event_id || null,
     idempotency_key: idempotencyKey,
     payload: payload ?? {},
+    metadata: {
+      payment_linkage_token: paymentLinkageToken,
+      linkage_strategy: 'shared-token-v1',
+    },
   });
 
   if (eventError) {
@@ -210,6 +223,10 @@ export async function POST(req: Request) {
       openai_model: env.OPENAI_MODEL ?? null,
       download_token: downloadToken,
       download_expires_at: downloadExpiresAt,
+      metadata: {
+        payment_linkage_token: paymentLinkageToken,
+        linkage_strategy: 'shared-token-v1',
+      },
     })
     .select('id')
     .single();
